@@ -81,3 +81,15 @@ This document records key technical and product decisions made for **TapBook** a
   1. Type `LogWalletTransactionIntent.amount` as `IntentCurrencyAmount?` so Apple Wallet's `Amount` (`Decimal` + `currencyCode`) binds natively without string coercion loss, keeping an optional `amountText: String?` fallback.
   2. Add a configurable **"Log $0 / Pending Amount Taps"** option (default ON) that saves a `$0` transaction badged **"待補金額 / Needs Amount"** on the Home screen and sends a reminder notification whenever a tap (such as Octopus) arrives without an amount.
 - **Consequences**: Credit card Apple Pay taps preserve exact amount and currency code (including foreign currencies), and Octopus taps are captured as 1-tap editable reminders instead of being silently dropped.
+
+---
+
+## ADR-009: Multi-Card Specificity Scoring & Optional Cascade on Account Rename
+
+- **Status**: Accepted
+- **Context**: Users commonly hold multiple cards on the same payment network (e.g., `HSBC Visa` and `Hang Seng Visa`, or `HSBC Visa` and `HSBC Mastercard`). First-match substring matching on `"visa"` or `"hsbc"` misrouted cards, and unconditionally renaming all past `"Visa"` records upon renaming `"Visa"` → `"HSBC Visa"` corrupted historical records from other Visa cards.
+- **Decision**:
+  1. Keep default network accounts (`Visa`, `Mastercard`) limited to network-only keywords (`visa`, `mastercard,master`) instead of bank names.
+  2. Score candidate accounts in `matchAccount` by specificity: exact name > full account name substring > bank-specific keywords > generic network fallback (only allowed on generic network buckets or accounts that already matched their bank).
+  3. Prompt the user with a confirmation dialog when renaming an account that has historical records: either cascade-rename all past records or rename the account only while preserving historical record labels.
+- **Consequences**: Multiple Visa/Mastercard accounts from different banks match accurately and historical data stays safe when splitting a generic card bucket into bank-specific cards.

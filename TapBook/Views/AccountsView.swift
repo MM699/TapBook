@@ -186,6 +186,8 @@ struct AccountEditorSheet: View {
     @State private var type: AccountType = .creditCard
     @State private var keywords: String = ""
     @State private var colorHex: String = "#1E3A8A"
+    @State private var showingRenameConfirm = false
+    @State private var affectedCount: Int = 0
 
     private let palette = ["#1E3A8A", "#B91C1C", "#EA580C", "#15803D", "#6D28D9", "#0F766E", "#334155"]
 
@@ -238,9 +240,30 @@ struct AccountEditorSheet: View {
                     Button(lang.t("取消", "Cancel")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(lang.t("儲存", "Save")) { save() }
+                    Button(lang.t("儲存", "Save")) { handleSaveTapped() }
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+            }
+            .confirmationDialog(
+                lang.t(
+                    "過往有 \(affectedCount) 筆「\(account?.name ?? "")」紀錄，要一齊改名嗎？",
+                    "Found \(affectedCount) existing records under '\(account?.name ?? "")'. Update them too?"
+                ),
+                isPresented: $showingRenameConfirm,
+                titleVisibility: .visible
+            ) {
+                Button(lang.t("一齊改名為「\(name.trimmingCharacters(in: .whitespacesAndNewlines))」", "Rename all to '\(name.trimmingCharacters(in: .whitespacesAndNewlines))'")) {
+                    commitSave(cascadeRename: true)
+                }
+                Button(lang.t("只改帳戶名，舊紀錄保留原名", "Rename account only, keep past records")) {
+                    commitSave(cascadeRename: false)
+                }
+                Button(lang.t("取消", "Cancel"), role: .cancel) {}
+            } message: {
+                Text(lang.t(
+                    "如果你有多張同類卡（例如多張唔同銀行 Visa），建議揀「只改帳戶名」，避免將其他銀行嘅舊紀錄一齊改錯。",
+                    "If you have multiple cards (e.g. multiple Visa cards), choose 'Rename account only' so other cards' past records stay untouched."
+                ))
             }
             .onAppear {
                 if let account {
@@ -253,7 +276,24 @@ struct AccountEditorSheet: View {
         }
     }
 
-    private func save() {
+    private func handleSaveTapped() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if let account, account.name != trimmed {
+            let oldName = account.name
+            let txCount = (try? modelContext.fetch(FetchDescriptor<TransactionRecord>()))?
+                .filter { $0.accountName == oldName }.count ?? 0
+            if txCount > 0 {
+                affectedCount = txCount
+                showingRenameConfirm = true
+                return
+            }
+        }
+        commitSave(cascadeRename: true)
+    }
+
+    private func commitSave(cascadeRename: Bool) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if let account {
@@ -264,7 +304,7 @@ struct AccountEditorSheet: View {
             account.colorHex = colorHex
             account.iconName = type.defaultIcon
 
-            if oldName != trimmed {
+            if cascadeRename && oldName != trimmed {
                 if let records = try? modelContext.fetch(FetchDescriptor<TransactionRecord>()) {
                     for record in records where record.accountName == oldName {
                         record.accountName = trimmed

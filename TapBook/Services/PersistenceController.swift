@@ -26,6 +26,31 @@ final class PersistenceController {
         migrateDefaultAEAccountIfNeeded()
         migrateAppleStoreRuleIfNeeded()
         migrateOctopusApplePayTitlesIfNeeded()
+        migrateGenericCardKeywordsIfNeeded()
+    }
+
+    private func migrateGenericCardKeywordsIfNeeded() {
+        let migrationKey = "tapbook_migrated_generic_card_keywords_v1"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+
+        let context = container.mainContext
+        let descriptor = FetchDescriptor<PaymentAccount>()
+        if let accounts = try? context.fetch(descriptor) {
+            var didModify = false
+            for account in accounts {
+                if account.name == "Visa" && account.walletMatchKeywords.lowercased().contains("hang seng") {
+                    account.walletMatchKeywords = "visa"
+                    didModify = true
+                } else if account.name == "Mastercard" && account.walletMatchKeywords.lowercased().contains("mox") {
+                    account.walletMatchKeywords = "mastercard,master"
+                    didModify = true
+                }
+            }
+            if didModify {
+                try? context.save()
+            }
+        }
+        UserDefaults.standard.set(true, forKey: migrationKey)
     }
 
     private func migrateOctopusApplePayTitlesIfNeeded() {
@@ -166,7 +191,7 @@ final class PersistenceController {
             let defaults: [PaymentAccount] = [
                 PaymentAccount(
                     name: "Visa",
-                    walletMatchKeywords: "visa,hsbc,hang seng,scb,standard chartered,citibank,citi,bochk,中銀,滙豐,恒生",
+                    walletMatchKeywords: "visa",
                     type: .creditCard,
                     colorHex: "#1E3A8A",
                     iconName: "creditcard.fill",
@@ -174,7 +199,7 @@ final class PersistenceController {
                 ),
                 PaymentAccount(
                     name: "Mastercard",
-                    walletMatchKeywords: "mastercard,master,mox,livi,za,red,dbs",
+                    walletMatchKeywords: "mastercard,master",
                     type: .creditCard,
                     colorHex: "#B91C1C",
                     iconName: "creditcard.fill",
@@ -465,6 +490,10 @@ final class PersistenceController {
         return record
     }
 
+    private static let genericNetworkKeywords: Set<String> = [
+        "visa", "mastercard", "master", "amex", "american express", "ae", "unionpay", "銀聯"
+    ]
+
     func matchAccount(for cardName: String?, in context: ModelContext) -> String {
         guard let cardName = cardName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !cardName.isEmpty else {
@@ -473,15 +502,53 @@ final class PersistenceController {
 
         let lower = cardName.lowercased()
         let descriptor = FetchDescriptor<PaymentAccount>(sortBy: [SortDescriptor(\.sortOrder)])
-        if let accounts = try? context.fetch(descriptor) {
-            if let exact = accounts.first(where: { $0.name.lowercased() == lower }) {
-                return exact.name
+        guard let accounts = try? context.fetch(descriptor), !accounts.isEmpty else {
+            return cardName
+        }
+
+        // 1. Exact case-insensitive account name match
+        if let exact = accounts.first(where: { $0.name.lowercased() == lower }) {
+            return exact.name
+        }
+
+        // 2. Score each account so bank-specific cards (e.g. "HSBC Visa" vs "Hang Seng Visa")
+        //    always beat generic network catch-alls ("Visa") and never steal another bank's Visa.
+        var bestAccount: PaymentAccount?
+        var bestScore = 0
+
+        for account in accounts {
+            var score = 0
+            let accNameLower = account.name.lowercased()
+
+            if lower.contains(accNameLower) && !Self.genericNetworkKeywords.contains(accNameLower) {
+                score += 500 + accNameLower.count
             }
-            if let keywordMatch = accounts.first(where: { account in
-                account.keywordsList.contains(where: { lower.contains($0) })
-            }) {
-                return keywordMatch.name
+
+            let keywords = account.keywordsList
+            let specificKeywords = keywords.filter { !Self.genericNetworkKeywords.contains($0) }
+            let networkKeywords = keywords.filter { Self.genericNetworkKeywords.contains($0) }
+
+            for kw in specificKeywords where lower.contains(kw) {
+                score += 100 + kw.count
             }
+
+            // Only allow generic network fallback ("visa" / "mastercard") if this account IS a generic
+            // network bucket (no bank-specific keywords and generic name), OR already matched its bank.
+            let isGenericBucket = specificKeywords.isEmpty && Self.genericNetworkKeywords.contains(accNameLower)
+            if isGenericBucket || score > 0 {
+                for kw in networkKeywords where lower.contains(kw) {
+                    score += 10
+                }
+            }
+
+            if score > bestScore {
+                bestScore = score
+                bestAccount = account
+            }
+        }
+
+        if let bestAccount, bestScore > 0 {
+            return bestAccount.name
         }
         return cardName
     }
