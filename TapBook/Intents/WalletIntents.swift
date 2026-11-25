@@ -52,9 +52,9 @@ struct LogWalletTransactionIntent: AppIntent {
 
     @Parameter(
         title: "金額 / Amount",
-        description: "由 Apple Wallet 交易傳入的金額（支援 HK$45.00 或純數字）"
+        description: "直接填入 Apple Wallet 交易的「Amount」（原生貨幣格式）"
     )
-    var amount: String?
+    var amount: IntentCurrencyAmount?
 
     @Parameter(
         title: "商戶 / Merchant",
@@ -64,9 +64,15 @@ struct LogWalletTransactionIntent: AppIntent {
 
     @Parameter(
         title: "卡片或帳戶 / Card or Account",
-        description: "Apple Wallet 卡片名稱（例如 Visa、Mastercard、AE、HSBC）"
+        description: "Apple Wallet 卡片名稱（例如 Visa、Mastercard、AE、八達通）"
     )
     var cardName: String?
+
+    @Parameter(
+        title: "備用金額文字 / Amount Text (Optional)",
+        description: "如使用純文字或數字格式金額可填此欄"
+    )
+    var amountText: String?
 
     @Parameter(
         title: "分類（可留空自動分類）/ Category (Optional)"
@@ -76,34 +82,63 @@ struct LogWalletTransactionIntent: AppIntent {
     static var parameterSummary: some ParameterSummary {
         Summary("自動記帳 \(\.$merchant) \(\.$amount)（\(\.$cardName)）") {
             \.$category
+            \.$amountText
         }
     }
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let rawAmount = amount ?? ""
         let rawMerchant = merchant ?? ""
         let rawCard = cardName ?? ""
+        let logPendingZero = UserDefaults.standard.object(forKey: "tapbook_log_pending_zero") as? Bool ?? true
+
+        let resolvedAmount: Double?
+        let resolvedCurrency: String
+
+        if let currencyAmount = amount {
+            resolvedAmount = abs(NSDecimalNumber(decimal: currencyAmount.amount).doubleValue)
+            resolvedCurrency = currencyAmount.currencyCode
+        } else if let text = amountText, !text.isEmpty {
+            resolvedAmount = PersistenceController.parseAmount(from: text)
+            resolvedCurrency = "HKD"
+        } else {
+            resolvedAmount = nil
+            resolvedCurrency = "HKD"
+        }
+
+        let amountDebug = amount.map { "\($0.currencyCode) \($0.amount)" } ?? (amountText ?? "nil")
 
         let record = PersistenceController.shared.autoLogWalletTransaction(
-            rawAmount: rawAmount,
+            numericAmount: resolvedAmount,
             merchant: rawMerchant,
             cardName: rawCard,
             explicitCategory: category?.spendingCategory,
-            source: .appleWallet
+            source: .appleWallet,
+            currencyCode: resolvedCurrency,
+            allowPendingZero: logPendingZero
         )
 
         guard let record else {
             PersistenceController.shared.appendDebugLog(
-                "Skipped | amount='\(rawAmount)' merchant='\(rawMerchant)' card='\(rawCard)'"
+                "Skipped | amount=\(amountDebug) merchant='\(rawMerchant)' card='\(rawCard)'"
             )
-            return .result(dialog: "無法辨識金額（收到：\(rawAmount)），未記帳。/ Could not parse amount.")
+            return .result(dialog: "略過 $0 拍卡紀錄。/ Skipped $0 tap.")
+        }
+
+        if record.amount == 0 {
+            PersistenceController.shared.appendDebugLog(
+                "Pending $0 | amount=\(amountDebug) merchant='\(record.merchant)' card='\(rawCard)' -> \(record.accountName)"
+            )
+            return .result(
+                dialog: "已記錄待補金額：\(record.merchant)（\(record.accountName)）"
+            )
         }
 
         PersistenceController.shared.appendDebugLog(
-            "Logged HK$\(String(format: "%.2f", record.amount)) | merchant='\(record.merchant)' card='\(rawCard)' -> \(record.accountName)"
+            "Logged \(record.currencyCode) \(String(format: "%.2f", record.amount)) | merchant='\(record.merchant)' card='\(rawCard)' -> \(record.accountName)"
         )
-        let formatted = String(format: "HK$%.2f", record.amount)
+        let symbol = record.currencyCode == "HKD" ? "HK$" : "\(record.currencyCode) "
+        let formatted = String(format: "\(symbol)%.2f", record.amount)
         return .result(
             dialog: "已記帳 \(record.merchant) \(formatted)（\(record.accountName)）"
         )

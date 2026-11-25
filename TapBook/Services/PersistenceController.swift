@@ -309,34 +309,88 @@ final class PersistenceController {
         merchant: String,
         cardName: String?,
         explicitCategory: SpendingCategory? = nil,
-        source: TransactionSource = .appleWallet
+        source: TransactionSource = .appleWallet,
+        currencyCode: String = "HKD",
+        allowPendingZero: Bool = false
     ) -> TransactionRecord? {
-        guard let amount = Self.parseAmount(from: rawAmount), amount > 0 else {
+        let parsed = Self.parseAmount(from: rawAmount)
+        return autoLogWalletTransaction(
+            numericAmount: parsed,
+            merchant: merchant,
+            cardName: cardName,
+            explicitCategory: explicitCategory,
+            source: source,
+            currencyCode: currencyCode,
+            allowPendingZero: allowPendingZero
+        )
+    }
+
+    func autoLogWalletTransaction(
+        numericAmount: Double?,
+        merchant: String,
+        cardName: String?,
+        explicitCategory: SpendingCategory? = nil,
+        source: TransactionSource = .appleWallet,
+        currencyCode: String = "HKD",
+        allowPendingZero: Bool = false
+    ) -> TransactionRecord? {
+        let finalAmount: Double
+        let isPendingAmount: Bool
+
+        if let numericAmount, numericAmount > 0 {
+            finalAmount = numericAmount
+            isPendingAmount = false
+        } else if allowPendingZero {
+            finalAmount = 0
+            isPendingAmount = true
+        } else {
             return nil
         }
 
         let context = container.mainContext
         let trimmedMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalMerchant = trimmedMerchant.isEmpty ? "Apple Pay" : trimmedMerchant
-
         let matchedAccount = matchAccount(for: cardName, in: context)
+
+        let finalMerchant: String
+        if !trimmedMerchant.isEmpty {
+            finalMerchant = trimmedMerchant
+        } else if matchedAccount.localizedCaseInsensitiveContains("八達通") || matchedAccount.localizedCaseInsensitiveContains("octopus") {
+            finalMerchant = "八達通消費"
+        } else {
+            finalMerchant = "Apple Pay"
+        }
+
         let matchedCategory = explicitCategory ?? categorize(merchant: finalMerchant, in: context)
+        let finalCurrency = currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "HKD" : currencyCode.uppercased()
+
+        var noteParts: [String] = []
+        if let cardName, !cardName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            noteParts.append("Apple Wallet · \(cardName)")
+        }
+        if isPendingAmount {
+            noteParts.append("待補金額")
+        }
 
         let record = TransactionRecord(
-            amount: amount,
+            amount: finalAmount,
             merchant: finalMerchant,
-            note: cardName?.isEmpty == false ? "Apple Wallet · \(cardName!)" : "",
+            note: noteParts.joined(separator: " · "),
             date: .now,
             category: matchedCategory,
             accountName: matchedAccount,
             source: source,
-            currencyCode: "HKD"
+            currencyCode: finalCurrency
         )
 
         context.insert(record)
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            appendDebugLog("SwiftData save error: \(error.localizedDescription)")
+            return nil
+        }
 
-        sendAutoLogNotification(record: record)
+        sendAutoLogNotification(record: record, isPendingAmount: isPendingAmount)
         return record
     }
 
@@ -406,7 +460,7 @@ final class PersistenceController {
         }
     }
 
-    func sendAutoLogNotification(record: TransactionRecord) {
+    func sendAutoLogNotification(record: TransactionRecord, isPendingAmount: Bool = false) {
         let notificationsEnabled = UserDefaults.standard.object(forKey: "tapbook_notifications") as? Bool ?? true
         guard notificationsEnabled else { return }
 
@@ -415,13 +469,24 @@ final class PersistenceController {
             (savedLang == AppLanguage.system.rawValue && (Locale.preferredLanguages.first?.hasPrefix("zh") ?? true))
 
         let content = UNMutableNotificationContent()
-        let formattedAmount = String(format: "HK$%.2f", record.amount)
-        if isChinese {
-            content.title = "TapBook 已自動記帳"
-            content.body = "\(record.merchant) · \(formattedAmount)（\(record.category.displayName(isChinese: true)) · \(record.accountName)）"
+        if isPendingAmount {
+            if isChinese {
+                content.title = "TapBook 偵測到拍卡（待補金額）"
+                content.body = "\(record.merchant)（\(record.accountName)）未回傳金額，點此打開補填。"
+            } else {
+                content.title = "TapBook Tap Detected (Needs Amount)"
+                content.body = "\(record.merchant) (\(record.accountName)) had no amount. Tap to fill in."
+            }
         } else {
-            content.title = "TapBook Auto-Logged"
-            content.body = "\(record.merchant) · \(formattedAmount) (\(record.category.displayName(isChinese: false)) · \(record.accountName))"
+            let symbol = record.currencyCode == "HKD" ? "HK$" : "\(record.currencyCode) "
+            let formattedAmount = String(format: "\(symbol)%.2f", record.amount)
+            if isChinese {
+                content.title = "TapBook 已自動記帳"
+                content.body = "\(record.merchant) · \(formattedAmount)（\(record.category.displayName(isChinese: true)) · \(record.accountName)）"
+            } else {
+                content.title = "TapBook Auto-Logged"
+                content.body = "\(record.merchant) · \(formattedAmount) (\(record.category.displayName(isChinese: false)) · \(record.accountName))"
+            }
         }
         content.sound = .default
 

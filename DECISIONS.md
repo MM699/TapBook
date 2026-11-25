@@ -70,3 +70,14 @@ This document records key technical and product decisions made for **TapBook** a
 - **Context**: Background iOS Shortcuts automations fail silently when `Notify` is disabled, making it hard to tell whether iOS failed to fire the trigger or TapBook failed to parse the input.
 - **Decision**: Record the last 15 raw `LogWalletTransactionIntent` invocations (timestamp, raw `amount`, `merchant`, `cardName`, and outcome) in `UserDefaults` and surface them in **Settings → Shortcuts Trigger Log (Debug)**.
 - **Consequences**: Immediate visibility on physical devices when diagnosing card-specific issues (e.g., AE, Visa, Octopus).
+
+---
+
+## ADR-008: Native `IntentCurrencyAmount?` Parameter & Pending `$0` Octopus Fallback
+
+- **Status**: Accepted
+- **Context**: Using `String?` for `LogWalletTransactionIntent.amount` caused iOS Shortcuts' Wallet `Transaction.Amount` (a native currency amount object) to coerce to an empty string on device, resulting in missed logs for both credit cards and Octopus. Additionally, Hong Kong Octopus taps often omit `Amount` entirely.
+- **Decision**:
+  1. Type `LogWalletTransactionIntent.amount` as `IntentCurrencyAmount?` so Apple Wallet's `Amount` (`Decimal` + `currencyCode`) binds natively without string coercion loss, keeping an optional `amountText: String?` fallback.
+  2. Add a configurable **"Log $0 / Pending Amount Taps"** option (default ON) that saves a `$0` transaction badged **"待補金額 / Needs Amount"** on the Home screen and sends a reminder notification whenever a tap (such as Octopus) arrives without an amount.
+- **Consequences**: Credit card Apple Pay taps preserve exact amount and currency code (including foreign currencies), and Octopus taps are captured as 1-tap editable reminders instead of being silently dropped.

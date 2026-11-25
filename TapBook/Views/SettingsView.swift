@@ -9,6 +9,7 @@ struct SettingsView: View {
 
     @AppStorage("tapbook_monthly_budget") private var monthlyBudget: Double = 8000
     @AppStorage("tapbook_notifications") private var notificationsEnabled: Bool = true
+    @AppStorage("tapbook_log_pending_zero") private var logPendingZero: Bool = true
 
     @State private var budgetInput: String = ""
     @State private var showingBudgetAlert = false
@@ -46,6 +47,15 @@ struct SettingsView: View {
                             lang.t("測試模擬 Apple Pay 拍卡記帳", "Simulate Apple Pay Tap"),
                             systemImage: "sparkles"
                         )
+                    }
+
+                    Toggle(isOn: $logPendingZero) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(lang.t("記錄 $0 / 待補金額拍卡", "Log $0 / Pending Amount Taps"))
+                            Text(lang.t("八達通未回傳金額時記為「待補金額」", "Saves a tappable reminder when Octopus omits amount"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     NavigationLink {
@@ -377,7 +387,12 @@ struct ShortcutsDebugLogView: View {
         .navigationTitle(lang.t("捷徑觸發紀錄", "Shortcuts Trigger Log"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    logs = PersistenceController.shared.fetchDebugLogs()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
                 Button(lang.t("清除", "Clear")) {
                     PersistenceController.shared.clearDebugLogs()
                     logs = []
@@ -386,6 +401,9 @@ struct ShortcutsDebugLogView: View {
             }
         }
         .onAppear {
+            logs = PersistenceController.shared.fetchDebugLogs()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             logs = PersistenceController.shared.fetchDebugLogs()
         }
     }

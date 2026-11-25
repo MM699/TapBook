@@ -448,9 +448,18 @@ struct TransactionRowView: View {
 
             Spacer()
 
-            Text("-\(lang.formatCurrency(record.amount, currencyCode: record.currencyCode))")
-                .font(.body.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.primary)
+            if record.amount == 0 {
+                Text(lang.t("待補金額", "Needs Amount"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.15), in: Capsule())
+            } else {
+                Text("-\(lang.formatCurrency(record.amount, currencyCode: record.currencyCode))")
+                    .font(.body.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.primary)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -553,7 +562,7 @@ struct TransactionEditorSheet: View {
             }
             .onAppear {
                 if let transaction {
-                    amountText = String(format: "%.2f", transaction.amount)
+                    amountText = transaction.amount > 0 ? String(format: "%.2f", transaction.amount) : ""
                     merchant = transaction.merchant
                     note = transaction.note
                     date = transaction.date
