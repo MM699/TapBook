@@ -17,6 +17,7 @@ struct AccountsView: View {
     @State private var showingAddAccount = false
     @State private var editingAccount: PaymentAccount?
     @State private var showingAddTemplate = false
+    @State private var editingTemplate: QuickTemplate?
 
     private func monthlySpending(for accountName: String) -> Double {
         let cal = Calendar.current
@@ -74,6 +75,10 @@ struct AccountsView: View {
                             Text(lang.formatCurrency(template.amount))
                                 .font(.subheadline.weight(.semibold))
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            editingTemplate = template
+                        }
                     }
                     .onDelete { offsets in
                         for index in offsets {
@@ -108,7 +113,10 @@ struct AccountsView: View {
                 AccountEditorSheet(account: account, nextSortOrder: account.sortOrder)
             }
             .sheet(isPresented: $showingAddTemplate) {
-                AddQuickTemplateSheet(nextSortOrder: templates.count)
+                QuickTemplateEditorSheet(template: nil, nextSortOrder: templates.count)
+            }
+            .sheet(item: $editingTemplate) { template in
+                QuickTemplateEditorSheet(template: template, nextSortOrder: template.sortOrder)
             }
         }
     }
@@ -249,11 +257,25 @@ struct AccountEditorSheet: View {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if let account {
+            let oldName = account.name
             account.name = trimmed
             account.type = type
             account.walletMatchKeywords = keywords
             account.colorHex = colorHex
             account.iconName = type.defaultIcon
+
+            if oldName != trimmed {
+                if let records = try? modelContext.fetch(FetchDescriptor<TransactionRecord>()) {
+                    for record in records where record.accountName == oldName {
+                        record.accountName = trimmed
+                    }
+                }
+                if let templates = try? modelContext.fetch(FetchDescriptor<QuickTemplate>()) {
+                    for template in templates where template.accountName == oldName {
+                        template.accountName = trimmed
+                    }
+                }
+            }
         } else {
             let newAccount = PaymentAccount(
                 name: trimmed,
@@ -270,7 +292,7 @@ struct AccountEditorSheet: View {
     }
 }
 
-struct AddQuickTemplateSheet: View {
+struct QuickTemplateEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(LanguageStore.self) private var lang
@@ -278,6 +300,7 @@ struct AddQuickTemplateSheet: View {
     @Query(sort: \PaymentAccount.sortOrder)
     private var accounts: [PaymentAccount]
 
+    let template: QuickTemplate?
     let nextSortOrder: Int
 
     @State private var title: String = ""
@@ -285,6 +308,10 @@ struct AddQuickTemplateSheet: View {
     @State private var merchant: String = ""
     @State private var category: SpendingCategory = .transport
     @State private var accountName: String = "八達通"
+
+    private var parsedAmount: Double? {
+        Double(amountText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 
     var body: some View {
         NavigationStack {
@@ -305,9 +332,13 @@ struct AddQuickTemplateSheet: View {
                     ForEach(accounts) { acc in
                         Text(acc.name).tag(acc.name)
                     }
+                    if !accountName.isEmpty && !accounts.contains(where: { $0.name == accountName }) {
+                        Text(accountName).tag(accountName)
+                    }
                 }
             }
-            .navigationTitle(lang.t("新增快記模板", "New Quick Template"))
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(template == nil ? lang.t("新增快記模板", "New Quick Template") : lang.t("編輯快記模板", "Edit Quick Template"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -315,24 +346,49 @@ struct AddQuickTemplateSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(lang.t("儲存", "Save")) {
-                        guard let amount = Double(amountText), amount > 0 else { return }
+                        guard let amount = parsedAmount, amount > 0 else { return }
                         let finalTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let finalMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? finalTitle : merchant
-                        let template = QuickTemplate(
-                            titleZh: finalTitle,
-                            titleEn: finalTitle,
-                            amount: amount,
-                            merchant: finalMerchant,
-                            category: category,
-                            accountName: accountName,
-                            iconName: category.icon,
-                            sortOrder: nextSortOrder
-                        )
-                        modelContext.insert(template)
+                        let finalMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? finalTitle : merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let template {
+                            template.titleZh = finalTitle
+                            template.titleEn = finalTitle
+                            template.amount = amount
+                            template.merchant = finalMerchant
+                            template.category = category
+                            template.accountName = accountName
+                            template.iconName = category.icon
+                        } else {
+                            let newTemplate = QuickTemplate(
+                                titleZh: finalTitle,
+                                titleEn: finalTitle,
+                                amount: amount,
+                                merchant: finalMerchant,
+                                category: category,
+                                accountName: accountName,
+                                iconName: category.icon,
+                                sortOrder: nextSortOrder
+                            )
+                            modelContext.insert(newTemplate)
+                        }
                         try? modelContext.save()
                         dismiss()
                     }
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (Double(amountText) ?? 0) <= 0)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (parsedAmount ?? 0) <= 0)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(lang.t("完成", "Done")) {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
+            }
+            .onAppear {
+                if let template {
+                    title = template.title(isChinese: lang.isChinese)
+                    amountText = String(format: "%.2f", template.amount)
+                    merchant = template.merchant
+                    category = template.category
+                    accountName = template.accountName
                 }
             }
         }

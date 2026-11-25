@@ -33,6 +33,7 @@ struct HomeView: View {
     private var accounts: [PaymentAccount]
 
     @AppStorage("tapbook_monthly_budget") private var monthlyBudget: Double = 8000
+    @AppStorage("tapbook_exclude_topup_from_total") private var excludeTopUpFromTotal: Bool = true
 
     @State private var selectedFilter: HomeFilter = .all
     @State private var searchText: String = ""
@@ -47,7 +48,9 @@ struct HomeView: View {
     }
 
     private var monthlyTotal: Double {
-        currentMonthTransactions.reduce(0) { $0 + $1.amount }
+        currentMonthTransactions
+            .filter { !excludeTopUpFromTotal || $0.category != .octopusTopUp }
+            .reduce(0) { $0 + $1.amount }
     }
 
     private var autoLoggedCount: Int {
@@ -332,7 +335,9 @@ struct HomeView: View {
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                let daySum = group.items.reduce(0) { $0 + $1.amount }
+                                let daySum = group.items
+                                    .filter { !excludeTopUpFromTotal || $0.category != .octopusTopUp }
+                                    .reduce(0) { $0 + $1.amount }
                                 Text(lang.formatCurrency(daySum))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.secondary)
@@ -484,20 +489,33 @@ struct TransactionEditorSheet: View {
     @State private var date: Date = .now
     @State private var category: SpendingCategory = .dining
     @State private var selectedAccount: String = "Visa"
+    @FocusState private var isAmountFocused: Bool
 
     var isEditing: Bool { transaction != nil }
+
+    private var parsedAmount: Double? {
+        Double(amountText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private var currencyPrefix: String {
+        guard let code = transaction?.currencyCode, !code.isEmpty, code != "HKD" else {
+            return "HK$"
+        }
+        return code
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section(lang.t("金額與商戶", "Amount & Merchant")) {
                     HStack {
-                        Text("HK$")
+                        Text(currencyPrefix)
                             .font(.title2.weight(.bold))
                             .foregroundStyle(.secondary)
                         TextField("0.00", text: $amountText)
                             .keyboardType(.decimalPad)
                             .font(.title2.weight(.bold))
+                            .focused($isAmountFocused)
                     }
 
                     TextField(lang.t("商戶名稱（例如：大家樂、港鐵）", "Merchant (e.g. Starbucks, MTR)"), text: $merchant)
@@ -525,6 +543,10 @@ struct TransactionEditorSheet: View {
                             Label(account.name, systemImage: account.iconName)
                                 .tag(account.name)
                         }
+                        if !selectedAccount.isEmpty && !accounts.contains(where: { $0.name == selectedAccount }) {
+                            Label(selectedAccount, systemImage: "creditcard.fill")
+                                .tag(selectedAccount)
+                        }
                     }
 
                     DatePicker(lang.t("日期時間", "Date & Time"), selection: $date)
@@ -550,6 +572,7 @@ struct TransactionEditorSheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(isEditing ? lang.t("編輯記帳", "Edit Expense") : lang.t("新增記帳", "Add Expense"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -558,7 +581,14 @@ struct TransactionEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(lang.t("儲存", "Save")) { save() }
-                        .disabled(Double(amountText) == nil || (Double(amountText) ?? 0) <= 0)
+                        .disabled((parsedAmount ?? 0) <= 0)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(lang.t("完成", "Done")) {
+                        isAmountFocused = false
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
                 }
             }
             .onAppear {
@@ -569,8 +599,14 @@ struct TransactionEditorSheet: View {
                     date = transaction.date
                     category = transaction.category
                     selectedAccount = transaction.accountName
-                } else if let firstAccount = accounts.first {
-                    selectedAccount = firstAccount.name
+                    if transaction.amount == 0 {
+                        isAmountFocused = true
+                    }
+                } else {
+                    if let firstAccount = accounts.first {
+                        selectedAccount = firstAccount.name
+                    }
+                    isAmountFocused = true
                 }
             }
         }
@@ -587,7 +623,7 @@ struct TransactionEditorSheet: View {
     }
 
     private func save() {
-        guard let amount = Double(amountText), amount > 0 else { return }
+        guard let amount = parsedAmount, amount > 0 else { return }
         let trimmedMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
         let isOctopus = selectedAccount.localizedCaseInsensitiveContains("八達通") ||
             selectedAccount.localizedCaseInsensitiveContains("octopus")

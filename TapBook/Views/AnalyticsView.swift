@@ -8,6 +8,8 @@ struct AnalyticsView: View {
     @Query(sort: \TransactionRecord.date, order: .reverse)
     private var allTransactions: [TransactionRecord]
 
+    @AppStorage("tapbook_exclude_topup_from_total") private var excludeTopUpFromTotal: Bool = true
+
     @State private var selectedMonth: Date = .now
 
     private var monthTransactions: [TransactionRecord] {
@@ -17,24 +19,33 @@ struct AnalyticsView: View {
         }
     }
 
+    private var effectiveTransactions: [TransactionRecord] {
+        monthTransactions.filter {
+            $0.amount > 0 && (!excludeTopUpFromTotal || $0.category != .octopusTopUp)
+        }
+    }
+
     private var totalSpent: Double {
-        monthTransactions.reduce(0) { $0 + $1.amount }
+        effectiveTransactions.reduce(0) { $0 + $1.amount }
     }
 
     private var categoryBreakdown: [(category: SpendingCategory, total: Double, ratio: Double)] {
         guard totalSpent > 0 else { return [] }
-        let grouped = Dictionary(grouping: monthTransactions, by: \.category)
-        return grouped.map { key, items in
+        let grouped = Dictionary(grouping: effectiveTransactions, by: \.category)
+        return grouped.compactMap { key, items in
             let sum = items.reduce(0) { $0 + $1.amount }
+            guard sum > 0 else { return nil }
             return (category: key, total: sum, ratio: sum / totalSpent)
         }
         .sorted { $0.total > $1.total }
     }
 
     private var accountBreakdown: [(account: String, total: Double, count: Int)] {
-        let grouped = Dictionary(grouping: monthTransactions, by: \.accountName)
-        return grouped.map { key, items in
+        let nonZero = monthTransactions.filter { $0.amount > 0 }
+        let grouped = Dictionary(grouping: nonZero, by: \.accountName)
+        return grouped.compactMap { key, items in
             let sum = items.reduce(0) { $0 + $1.amount }
+            guard sum > 0 else { return nil }
             return (account: key, total: sum, count: items.count)
         }
         .sorted { $0.total > $1.total }
@@ -51,12 +62,14 @@ struct AnalyticsView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     monthSelector
-                    if monthTransactions.isEmpty {
+                    if totalSpent <= 0 {
                         emptyState
                     } else {
                         summaryMetricsRow
                         categoryChartCard
-                        accountBreakdownCard
+                        if !accountBreakdown.isEmpty {
+                            accountBreakdownCard
+                        }
                     }
                 }
                 .padding()

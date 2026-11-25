@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("tapbook_monthly_budget") private var monthlyBudget: Double = 8000
     @AppStorage("tapbook_notifications") private var notificationsEnabled: Bool = true
     @AppStorage("tapbook_log_pending_zero") private var logPendingZero: Bool = true
+    @AppStorage("tapbook_exclude_topup_from_total") private var excludeTopUpFromTotal: Bool = true
 
     @State private var budgetInput: String = ""
     @State private var showingBudgetAlert = false
@@ -32,7 +33,7 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(lang.t("Apple Wallet 自動記帳設定", "Apple Wallet Auto-Log Setup"))
                                     .font(.body.weight(.semibold))
-                                Text(lang.t("3 分鐘設定捷徑自動化（Visa / Mastercard）", "3-minute Shortcuts automation guide"))
+                                Text(lang.t("3 分鐘設定捷徑自動化（Visa / Mastercard / AE / 八達通）", "3-minute Shortcuts automation guide"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -97,6 +98,15 @@ struct SettingsView: View {
                                 .foregroundStyle(.primary)
                             Spacer()
                             Text(lang.formatCurrency(monthlyBudget))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Toggle(isOn: $excludeTopUpFromTotal) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(lang.t("「八達通增值」不計入總支出", "Exclude Octopus Top-Up from Total"))
+                            Text(lang.t("避免信用卡增值同八達通實際消費重複計算", "Prevents double-counting card top-ups and Octopus spending"))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -224,8 +234,8 @@ struct WalletSetupGuideView: View {
                     number: "2",
                     title: lang.t("揀選「交易」(Transaction)", "Choose 'Transaction'"),
                     detail: lang.t(
-                        "搵到並點選「交易」→ 勾選你常用嘅 Visa / Mastercard → 揀選「立即執行」（唔好揀執行前詢問）→ 按「下一步」。",
-                        "Select 'Transaction' → check your Visa / Mastercard cards → select 'Run Immediately' → tap Next."
+                        "搵到並點選「交易」→ 可揀 Any Card（或勾選你嘅 Visa / Mastercard / AE / 八達通）→ 開啟「Automation（立即執行）」並關閉「Notify」。",
+                        "Select 'Transaction' → choose Any Card (or check Visa / Mastercard / AE / Octopus) → turn ON Automation (Run Immediately) and turn OFF Notify."
                     )
                 )
 
@@ -233,32 +243,32 @@ struct WalletSetupGuideView: View {
                     number: "3",
                     title: lang.t("加入 TapBook 動作", "Add TapBook Action"),
                     detail: lang.t(
-                        "點選「新增空白自動化」→ 搜尋「TapBook」→ 揀選「記錄 Apple Wallet 交易」。",
-                        "Tap 'New Blank Automation' → search 'TapBook' → choose 'Log Apple Wallet Transaction'."
+                        "搜尋「TapBook」→ 揀選「記錄 Apple Wallet 交易」，展開選項並關閉「Show When Run」（執行時顯示）。",
+                        "Search 'TapBook' → choose 'Log Apple Wallet Transaction', expand options, and turn OFF 'Show When Run'."
                     )
                 )
 
                 stepCard(
                     number: "4",
-                    title: lang.t("填入 3 個捷徑變數", "Map the 3 Shortcut Variables"),
+                    title: lang.t("填入 3 個交易變數", "Map the 3 Transaction Variables"),
                     detail: lang.t(
-                        "• 金額 → 揀「捷徑輸入（金額）」\n• 商戶 → 揀「捷徑輸入（商戶）」\n• 卡片或帳戶 → 揀「捷徑輸入（卡或票證）」\n完成後按「完成」即刻生效！",
-                        "• Amount → Shortcut Input (Amount)\n• Merchant → Shortcut Input (Merchant)\n• Card or Account → Shortcut Input (Card or Pass)\nTap Done and you're all set!"
+                        "• 商戶 → 揀觸發器嘅「Merchant」\n• 金額 → 揀觸發器嘅「Amount」\n• 卡片或帳戶 → 揀觸發器嘅「Card or Pass」\n完成後返回即自動儲存生效！",
+                        "• Merchant → Transaction (Merchant)\n• Amount → Transaction (Amount)\n• Card or Account → Transaction (Card or Pass)\nGo back to save and activate!"
                     )
                 )
 
                 // Octopus note
                 VStack(alignment: .leading, spacing: 8) {
                     Label(
-                        lang.t("關於八達通 (Octopus)", "About Octopus"),
+                        lang.t("關於香港八達通 (Octopus)", "About Hong Kong Octopus"),
                         systemImage: "info.circle.fill"
                     )
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.orange)
 
                     Text(lang.t(
-                        "由於 iOS 系統限制，特快交通八達通拍卡時唔會觸發 Apple 捷徑「交易」事件（用信用卡增值八達通時就會觸發）。日常搭車或便利店用八達通，建議用首頁嘅「一鍵快記」按鈕或同 Siri 講「用 TapBook 記帳」！",
-                        "Due to iOS system limits, Express Transit Octopus taps don't trigger Shortcuts Transaction automations (credit card top-ups do). For daily Octopus rides or snacks, use Home's 1-Tap Quick Templates or say 'Log expense in TapBook' to Siri!"
+                        "八達通係離線晶片扣數，iOS 觸發捷徑時唔會回傳金額。開啟「記錄 $0 / 待補金額拍卡」後，每次嘟八達通會自動記低一筆「八達通消費（待補金額）」並彈通知提醒，點一下即可直接打銀碼；亦可用首頁「一鍵快記」一秒入數。",
+                        "Octopus deducts offline in the Secure Element, so iOS omits Amount in Shortcuts. With 'Log $0 / Pending Amount Taps' enabled, TapBook logs an 'Octopus (Needs Amount)' entry so you can fill in the amount with 1 tap, or use Home's Quick Tap buttons."
                     ))
                     .font(.caption)
                     .foregroundStyle(.secondary)

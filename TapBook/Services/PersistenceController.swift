@@ -181,12 +181,20 @@ final class PersistenceController {
                     sortOrder: 1
                 ),
                 PaymentAccount(
+                    name: "AE",
+                    walletMatchKeywords: "amex,american express,ae,explorer,platinum,blue cash,美國運通",
+                    type: .creditCard,
+                    colorHex: "#0284C7",
+                    iconName: "creditcard.fill",
+                    sortOrder: 2
+                ),
+                PaymentAccount(
                     name: "八達通",
                     walletMatchKeywords: "octopus,八達通",
                     type: .octopus,
                     colorHex: "#EA580C",
                     iconName: "wave.3.right",
-                    sortOrder: 2
+                    sortOrder: 3
                 ),
                 PaymentAccount(
                     name: "現金",
@@ -194,7 +202,7 @@ final class PersistenceController {
                     type: .cash,
                     colorHex: "#15803D",
                     iconName: "banknote.fill",
-                    sortOrder: 3
+                    sortOrder: 4
                 )
             ]
             defaults.forEach { context.insert($0) }
@@ -565,8 +573,8 @@ final class PersistenceController {
 
     static func generateCSV(from records: [TransactionRecord], isChinese: Bool) -> String {
         let header = isChinese
-            ? "日期,時間,商戶,金額(HKD),分類,帳戶,來源,備註"
-            : "Date,Time,Merchant,Amount(HKD),Category,Account,Source,Note"
+            ? "日期,時間,商戶,金額,貨幣,分類,帳戶,來源,備註"
+            : "Date,Time,Merchant,Amount,Currency,Category,Account,Source,Note"
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         let timeFormatter = DateFormatter()
@@ -578,11 +586,12 @@ final class PersistenceController {
             let t = timeFormatter.string(from: r.date)
             let merchant = escapeCSV(r.merchant)
             let amount = String(format: "%.2f", r.amount)
+            let currency = escapeCSV(r.currencyCode)
             let category = escapeCSV(r.category.displayName(isChinese: isChinese))
             let account = escapeCSV(r.accountName)
             let source = escapeCSV(r.source.badgeLabel(isChinese: isChinese))
             let note = escapeCSV(r.note)
-            rows.append("\(d),\(t),\(merchant),\(amount),\(category),\(account),\(source),\(note)")
+            rows.append("\(d),\(t),\(merchant),\(amount),\(currency),\(category),\(account),\(source),\(note)")
         }
         return rows.joined(separator: "\n")
     }
