@@ -25,6 +25,40 @@ final class PersistenceController {
         migrateDefaultOctopusRulesIfNeeded()
         migrateDefaultAEAccountIfNeeded()
         migrateAppleStoreRuleIfNeeded()
+        migrateOctopusApplePayTitlesIfNeeded()
+    }
+
+    private func migrateOctopusApplePayTitlesIfNeeded() {
+        let migrationKey = "tapbook_migrated_octopus_titles_v1"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+
+        let context = container.mainContext
+        let descriptor = FetchDescriptor<TransactionRecord>()
+        if let records = try? context.fetch(descriptor) {
+            var didModify = false
+            for record in records {
+                let isOctopus = record.accountName.localizedCaseInsensitiveContains("八達通") ||
+                    record.accountName.localizedCaseInsensitiveContains("octopus")
+                if isOctopus && record.merchant == "Apple Pay" {
+                    record.merchant = "八達通消費"
+                    if record.category == .shopping {
+                        record.category = .other
+                    }
+                    didModify = true
+                }
+                if record.amount > 0 && record.note.contains("待補金額") {
+                    record.note = record.note
+                        .components(separatedBy: " · ")
+                        .filter { !$0.isEmpty && $0 != "待補金額" }
+                        .joined(separator: " · ")
+                    didModify = true
+                }
+            }
+            if didModify {
+                try? context.save()
+            }
+        }
+        UserDefaults.standard.set(true, forKey: migrationKey)
     }
 
     private func migrateAppleStoreRuleIfNeeded() {

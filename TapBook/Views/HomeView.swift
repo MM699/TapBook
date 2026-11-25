@@ -502,7 +502,8 @@ struct TransactionEditorSheet: View {
 
                     TextField(lang.t("商戶名稱（例如：大家樂、港鐵）", "Merchant (e.g. Starbucks, MTR)"), text: $merchant)
                         .onChange(of: merchant) { _, newValue in
-                            if !isEditing && !newValue.isEmpty {
+                            let wasGeneric = transaction.map { Self.genericMerchants.contains($0.merchant) } ?? true
+                            if wasGeneric && !newValue.isEmpty {
                                 let suggested = PersistenceController.shared.categorize(merchant: newValue, in: modelContext)
                                 if suggested != .other {
                                     category = suggested
@@ -563,8 +564,8 @@ struct TransactionEditorSheet: View {
             .onAppear {
                 if let transaction {
                     amountText = transaction.amount > 0 ? String(format: "%.2f", transaction.amount) : ""
-                    merchant = transaction.merchant
-                    note = transaction.note
+                    merchant = Self.genericMerchants.contains(transaction.merchant) ? "" : transaction.merchant
+                    note = Self.cleanedPendingNote(transaction.note)
                     date = transaction.date
                     category = transaction.category
                     selectedAccount = transaction.accountName
@@ -575,16 +576,43 @@ struct TransactionEditorSheet: View {
         }
     }
 
+    private static let genericMerchants: Set<String> = ["Apple Pay", "八達通消費", "Octopus"]
+
+    private static func cleanedPendingNote(_ raw: String) -> String {
+        raw
+            .components(separatedBy: " · ")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != "待補金額" }
+            .joined(separator: " · ")
+    }
+
     private func save() {
         guard let amount = Double(amountText), amount > 0 else { return }
-        let finalMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? category.displayName(isChinese: lang.isChinese)
-            : merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isOctopus = selectedAccount.localizedCaseInsensitiveContains("八達通") ||
+            selectedAccount.localizedCaseInsensitiveContains("octopus")
+
+        let finalMerchant: String
+        if trimmedMerchant.isEmpty || (isOctopus && trimmedMerchant == "Apple Pay") {
+            if isOctopus {
+                finalMerchant = lang.t("八達通消費", "Octopus")
+            } else if transaction?.source == .appleWallet {
+                finalMerchant = "Apple Pay"
+            } else {
+                finalMerchant = category.displayName(isChinese: lang.isChinese)
+            }
+        } else if !isOctopus && (trimmedMerchant == "八達通消費" || trimmedMerchant == "Octopus") {
+            finalMerchant = "Apple Pay"
+        } else {
+            finalMerchant = trimmedMerchant
+        }
+
+        let cleanedNote = Self.cleanedPendingNote(note)
 
         if let transaction {
             transaction.amount = amount
             transaction.merchant = finalMerchant
-            transaction.note = note
+            transaction.note = cleanedNote
             transaction.date = date
             transaction.category = category
             transaction.accountName = selectedAccount
@@ -592,7 +620,7 @@ struct TransactionEditorSheet: View {
             let record = TransactionRecord(
                 amount: amount,
                 merchant: finalMerchant,
-                note: note,
+                note: cleanedNote,
                 date: date,
                 category: category,
                 accountName: selectedAccount,
