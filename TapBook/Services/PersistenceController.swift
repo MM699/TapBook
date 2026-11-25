@@ -24,6 +24,26 @@ final class PersistenceController {
         seedInitialDataIfNeeded()
         migrateDefaultOctopusRulesIfNeeded()
         migrateDefaultAEAccountIfNeeded()
+        migrateAppleStoreRuleIfNeeded()
+    }
+
+    private func migrateAppleStoreRuleIfNeeded() {
+        let migrationKey = "tapbook_migrated_apple_store_rule_v1"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+
+        let context = container.mainContext
+        let descriptor = FetchDescriptor<MerchantRule>()
+        if let rules = try? context.fetch(descriptor) {
+            var didModify = false
+            for rule in rules where rule.isDefault && rule.keyword.lowercased() == "apple" {
+                rule.keyword = "apple store"
+                didModify = true
+            }
+            if didModify {
+                try? context.save()
+            }
+        }
+        UserDefaults.standard.set(true, forKey: migrationKey)
     }
 
     private func migrateDefaultAEAccountIfNeeded() {
@@ -218,7 +238,8 @@ final class PersistenceController {
                 // Shopping
                 ("uniqlo", .shopping),
                 ("zara", .shopping),
-                ("apple", .shopping),
+                ("apple store", .shopping),
+                ("apple.com", .shopping),
                 ("log-on", .shopping),
                 ("sogo", .shopping),
                 ("ikea", .shopping),
@@ -349,7 +370,15 @@ final class PersistenceController {
 
         let context = container.mainContext
         let trimmedMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matchedAccount = matchAccount(for: cardName, in: context)
+        let trimmedCard = cardName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        let matchedAccount: String
+        if trimmedCard.isEmpty && isPendingAmount {
+            // Hong Kong Octopus taps omit both Amount and Card in iOS Shortcuts
+            matchedAccount = "八達通"
+        } else {
+            matchedAccount = matchAccount(for: cardName, in: context)
+        }
 
         let finalMerchant: String
         if !trimmedMerchant.isEmpty {
