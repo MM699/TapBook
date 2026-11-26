@@ -28,6 +28,50 @@ final class PersistenceController {
         migrateOctopusApplePayTitlesIfNeeded()
         migrateGenericCardKeywordsIfNeeded()
         migrateDefaultPayMeAlipayAccountsIfNeeded()
+        migrateWalletCardMerchantCleanupIfNeeded()
+    }
+
+    private func migrateWalletCardMerchantCleanupIfNeeded() {
+        let migrationKey = "tapbook_migrated_wallet_card_cleanup_v1"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+
+        let context = container.mainContext
+
+        // Add "宜家" shopping rule if missing
+        let ruleDesc = FetchDescriptor<MerchantRule>()
+        if let rules = try? context.fetch(ruleDesc) {
+            if !rules.contains(where: { $0.keyword.lowercased() == "宜家" }) {
+                context.insert(MerchantRule(keyword: "宜家", category: .shopping, isDefault: true))
+            }
+        }
+
+        // Clean up any existing records where accountName accidentally concatenated "<Bank> <Merchant> <Amount>"
+        let recDesc = FetchDescriptor<TransactionRecord>()
+        if let records = try? context.fetch(recDesc) {
+            var didModify = false
+            for record in records where record.merchant == "Apple Pay" && record.accountName.contains("$") {
+                let raw = record.accountName
+                if let parsed = NotificationParser.parse(
+                    title: raw.hasPrefix("American Express") ? "American Express" : (raw.components(separatedBy: " ").first ?? ""),
+                    body: raw
+                        .replacingOccurrences(of: "American Express ", with: "")
+                        .replacingOccurrences(of: "HSBC ", with: "")
+                ) {
+                    record.merchant = parsed.merchant
+                    record.accountName = matchAccount(for: parsed.accountHint, in: context)
+                    let cat = categorize(merchant: record.merchant, in: context)
+                    if cat != .other {
+                        record.category = cat
+                    }
+                    didModify = true
+                }
+            }
+            if didModify {
+                try? context.save()
+            }
+        }
+        try? context.save()
+        UserDefaults.standard.set(true, forKey: migrationKey)
     }
 
     private func migrateDefaultPayMeAlipayAccountsIfNeeded() {
@@ -376,6 +420,7 @@ final class PersistenceController {
                 ("log-on", .shopping),
                 ("sogo", .shopping),
                 ("ikea", .shopping),
+                ("宜家", .shopping),
                 ("decathlon", .shopping),
                 ("mannings", .shopping),
                 ("萬寧", .shopping),
@@ -617,9 +662,9 @@ final class PersistenceController {
                 score += 100 + kw.count
             }
 
-            // Only allow generic network fallback ("visa" / "mastercard") if this account IS a generic
-            // network bucket (no bank-specific keywords and generic name), OR already matched its bank.
-            let isGenericBucket = specificKeywords.isEmpty && Self.genericNetworkKeywords.contains(accNameLower)
+            // Only allow generic network fallback ("visa" / "mastercard" / "ae") if this account IS a generic
+            // network bucket (account name itself is generic like "Visa", "Mastercard", "AE"), OR already matched its bank.
+            let isGenericBucket = Self.genericNetworkKeywords.contains(accNameLower)
             if isGenericBucket || score > 0 {
                 for kw in networkKeywords where lower.contains(kw) {
                     score += 10

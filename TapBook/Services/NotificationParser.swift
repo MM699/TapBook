@@ -119,8 +119,16 @@ enum NotificationParser {
         if lower.contains("alipay") || lower.contains("支付寶") {
             return "AlipayHK"
         }
-        let joined = [title, subtitle, body].filter { !$0.isEmpty }.joined(separator: " ")
-        return !joined.isEmpty ? joined : appName
+        // For Apple Wallet / Bank notifications, `title` is usually the card or bank name
+        // (e.g. "American Express", "HSBC", "Hang Seng"). Never concatenate `body` (which contains merchant + amount)
+        // so unmatched banks stay clean (e.g. "HSBC" instead of "HSBC merchant.X HK$103.00").
+        if !title.isEmpty {
+            return title
+        }
+        if !appName.isEmpty {
+            return appName
+        }
+        return "Visa"
     }
 
     private static func extractBalanceAmount(from text: String) -> Double? {
@@ -257,7 +265,31 @@ enum NotificationParser {
             }
         }
 
-        // Fallback: Apple Wallet credit card notifications put the merchant name directly in `title` (e.g. "Starbucks")
+        // Apple Wallet card notification format:
+        // Title = "American Express" / "HSBC", Body (or Subtitle) = "宜家，香港銅鑼灣 HK$19.90" or "merchant.ApplePayDeepvert HK$103.00"
+        if !isPayMe && !isAlipay {
+            let sanitized = stripBalanceClauses(from: searchable)
+            let beforeAmountPattern = #"^([^\n]+?)\s+(?:HK\$|HKD|US\$|USD|JP¥|JPY|CN¥|CNY|RMB|GBP|£|EUR|€|TWD|NT\$|MOP|港幣|\$)\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?"#
+            if let regex = try? NSRegularExpression(pattern: beforeAmountPattern, options: [.caseInsensitive, .anchorsMatchLines]) {
+                let nsRange = NSRange(sanitized.startIndex..., in: sanitized)
+                if let match = regex.firstMatch(in: sanitized, options: [], range: nsRange),
+                   match.range(at: 1).location != NSNotFound,
+                   let range = Range(match.range(at: 1), in: sanitized) {
+                    var candidate = String(sanitized[range])
+                        .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+                    if candidate.lowercased().hasPrefix("merchant.") {
+                        candidate = String(candidate.dropFirst("merchant.".count))
+                    }
+                    let spendPrefixes = ["消費", "扣款", "付款", "支付", "簽帳", "簽賬", "增值", "自動增值", "paid", "spent", "payment"]
+                    let isJustSpendLabel = spendPrefixes.contains { candidate.lowercased() == $0 || candidate.lowercased().hasPrefix("\($0):") || candidate.lowercased().hasPrefix("\($0)：") }
+                    if !candidate.isEmpty && !isJustSpendLabel && !genericAppTitles.contains(candidate.lowercased()) {
+                        return candidate
+                    }
+                }
+            }
+        }
+
+        // Fallback: Some Wallet notifications put the merchant name directly in `title` (e.g. "Starbucks")
         if !isPayMe && !isAlipay && !title.isEmpty && !genericAppTitles.contains(title.lowercased()) {
             return title
         }
