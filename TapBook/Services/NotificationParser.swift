@@ -27,12 +27,13 @@ enum NotificationParser {
         "citi", "citibank", "scb", "standard chartered", "渣打", "mox", "dbs", "za bank", "livi"
     ]
 
-    static func parse(title: String, body: String, appName: String = "") -> ParsedNotification? {
+    static func parse(title: String, subtitle: String = "", body: String, appName: String = "") -> ParsedNotification? {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSubtitle = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedApp = appName.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let combined = [trimmedTitle, trimmedBody, trimmedApp]
+        let combined = [trimmedTitle, trimmedSubtitle, trimmedBody, trimmedApp]
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
 
@@ -46,24 +47,45 @@ enum NotificationParser {
         }
 
         // 2. Determine account source
-        let accountHint = detectAccountHint(title: trimmedTitle, body: trimmedBody, appName: trimmedApp)
+        let accountHint = detectAccountHint(title: trimmedTitle, subtitle: trimmedSubtitle, body: trimmedBody, appName: trimmedApp)
         let isOctopus = accountHint == "八達通"
         let isPayMe = accountHint == "PayMe"
         let isAlipay = accountHint == "AlipayHK"
 
-        // 3. Extract spend amount (carefully ignoring balance / remaining credit text)
-        guard let (amount, currency) = extractSpendAmount(from: trimmedBody.isEmpty ? combined : trimmedBody, fallbackText: combined),
-              amount > 0 else {
+        // Always track Octopus new balance if present (enables balance-diff fallback if Subtitle wasn't mapped)
+        let detectedNewBalance: Double? = isOctopus ? extractBalanceAmount(from: combined) : nil
+        let previousOctopusBalance = UserDefaults.standard.object(forKey: "tapbook_last_octopus_balance") as? Double
+        if let detectedNewBalance {
+            UserDefaults.standard.set(detectedNewBalance, forKey: "tapbook_last_octopus_balance")
+        }
+
+        // 3. Extract spend amount (prioritize Subtitle first — Apple Wallet Octopus puts "消費：HK$31.00" in Subtitle!)
+        let primaryText = [trimmedSubtitle, trimmedBody].filter { !$0.isEmpty }.joined(separator: "\n")
+        var resolvedAmountAndCurrency = extractSpendAmount(from: primaryText.isEmpty ? combined : primaryText, fallbackText: combined)
+        var inferredTopUp = isTopUp
+
+        // Fallback for Octopus if user didn't map Subtitle yet: compute diff from previous balance
+        if resolvedAmountAndCurrency == nil, isOctopus, let newBal = detectedNewBalance, let oldBal = previousOctopusBalance {
+            let diff = ((oldBal - newBal) * 100).rounded() / 100
+            if diff > 0 {
+                resolvedAmountAndCurrency = (diff, "HKD")
+            } else if diff < 0 {
+                resolvedAmountAndCurrency = (abs(diff), "HKD")
+                inferredTopUp = true
+            }
+        }
+
+        guard let (amount, currency) = resolvedAmountAndCurrency, amount > 0 else {
             return nil
         }
 
         // 4. Determine merchant & optional category override
-        let categoryOverride: SpendingCategory? = (isOctopus && isTopUp) ? .octopusTopUp : nil
+        let categoryOverride: SpendingCategory? = (isOctopus && inferredTopUp) ? .octopusTopUp : nil
 
         let merchant: String
-        if isOctopus && isTopUp {
+        if isOctopus && inferredTopUp {
             merchant = "八達通增值"
-        } else if let extracted = extractMerchant(title: trimmedTitle, body: trimmedBody, isPayMe: isPayMe, isAlipay: isAlipay) {
+        } else if let extracted = extractMerchant(title: trimmedTitle, subtitle: trimmedSubtitle, body: trimmedBody, isPayMe: isPayMe, isAlipay: isAlipay) {
             merchant = extracted
         } else if isOctopus {
             merchant = "八達通消費"
@@ -86,8 +108,8 @@ enum NotificationParser {
 
     // MARK: - Account Detection
 
-    private static func detectAccountHint(title: String, body: String, appName: String) -> String {
-        let lower = "\(appName) \(title) \(body)".lowercased()
+    private static func detectAccountHint(title: String, subtitle: String, body: String, appName: String) -> String {
+        let lower = "\(appName) \(title) \(subtitle) \(body)".lowercased()
         if lower.contains("octopus") || lower.contains("八達通") {
             return "八達通"
         }
@@ -97,10 +119,23 @@ enum NotificationParser {
         if lower.contains("alipay") || lower.contains("支付寶") {
             return "AlipayHK"
         }
-        if !title.isEmpty && !body.isEmpty {
-            return "\(title) \(body)"
+        let joined = [title, subtitle, body].filter { !$0.isEmpty }.joined(separator: " ")
+        return !joined.isEmpty ? joined : appName
+    }
+
+    private static func extractBalanceAmount(from text: String) -> Double? {
+        let pattern = #"(?:新餘額為|新餘額|餘額為|餘額|new balance is|new balance|balance)\s*[:：]?\s*(?:HK\$|HKD|\$)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
         }
-        return !title.isEmpty ? title : (!appName.isEmpty ? appName : body)
+        let nsRange = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: nsRange),
+              match.range(at: 1).location != NSNotFound,
+              let range = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        let numStr = String(text[range]).replacingOccurrences(of: ",", with: "")
+        return Double(numStr)
     }
 
     // MARK: - Amount Extraction (ignores balance / available credit lines)
@@ -199,8 +234,9 @@ enum NotificationParser {
 
     // MARK: - Merchant Extraction
 
-    private static func extractMerchant(title: String, body: String, isPayMe: Bool, isAlipay: Bool) -> String? {
-        // Check body patterns first (PayMe, AlipayHK, HK banks)
+    private static func extractMerchant(title: String, subtitle: String, body: String, isPayMe: Bool, isAlipay: Bool) -> String? {
+        let searchable = [subtitle, body].filter { !$0.isEmpty }.joined(separator: "\n")
+        // Check body/subtitle patterns first (PayMe, AlipayHK, HK banks)
         let patterns = [
             #"(?:支付|付款|轉帳|過數).*?(?:給|予|向|to)\s+([^\n。.,，!！]{1,36})"#,
             #"(?:向|於)\s*([^\n。.,，!！]{1,36}?)\s*(?:付款|支付|消費|簽帳|簽賬)"#,
@@ -208,11 +244,11 @@ enum NotificationParser {
         ]
         for pattern in patterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-                let nsRange = NSRange(body.startIndex..., in: body)
-                if let match = regex.firstMatch(in: body, options: [], range: nsRange),
+                let nsRange = NSRange(searchable.startIndex..., in: searchable)
+                if let match = regex.firstMatch(in: searchable, options: [], range: nsRange),
                    match.range(at: 1).location != NSNotFound,
-                   let range = Range(match.range(at: 1), in: body) {
-                    let candidate = String(body[range])
+                   let range = Range(match.range(at: 1), in: searchable) {
+                    let candidate = String(searchable[range])
                         .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
                     if !candidate.isEmpty && !genericAppTitles.contains(candidate.lowercased()) {
                         return candidate

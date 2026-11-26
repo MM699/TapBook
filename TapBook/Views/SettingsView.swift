@@ -285,10 +285,10 @@ struct WalletSetupGuideView: View {
 
                 stepCard(
                     number: "4",
-                    title: lang.t("填入通知嘅「標題」同「內文」", "Map Notification Title & Body"),
+                    title: lang.t("填入通知嘅「標題」、「副標題」同「內文」", "Map Notification Title, Subtitle & Body"),
                     detail: lang.t(
-                        "• 通知標題 → 揀通知觸發器嘅「Title / 標題」\n• 通知內容 → 揀通知觸發器嘅「Body / 內文」\n完成後返回儲存即刻生效！如果之前整過舊嘅「交易」自動化可以關閉，免得重覆。",
-                        "• Notification Title → Notification (Title)\n• Notification Body → Notification (Body)\nGo back to save! You can turn off the older Transaction automation to keep things clean."
+                        "• 通知標題 → 揀通知觸發器嘅「標題 / Title」\n• 通知副標題 → 揀通知觸發器嘅「副標題 / Subtitle」（八達通消費額喺呢度！）\n• 通知內容 → 揀通知觸發器嘅「內文 / Body」\n完成後返回儲存即刻生效！",
+                        "• Notification Title → Notification (Title)\n• Notification Subtitle → Notification (Subtitle) — Octopus spend amount is here!\n• Notification Body → Notification (Body)\nGo back to save and activate!"
                     )
                 )
 

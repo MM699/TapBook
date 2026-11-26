@@ -163,8 +163,14 @@ struct LogFromNotificationIntent: AppIntent {
     var title: String?
 
     @Parameter(
+        title: "通知副標題 / Notification Subtitle",
+        description: "填入捷徑通知的「副標題」（Apple Wallet 八達通的「消費：HK$31.00」在此欄！）"
+    )
+    var subtitle: String?
+
+    @Parameter(
         title: "通知內容 / Notification Body",
-        description: "填入捷徑通知的「內文」（例如：消費：HK$8.00 你的新餘額為 HK$95.10。）"
+        description: "填入捷徑通知的「內文」（例如：你的新餘額為 HK$64.10。）"
     )
     var body: String?
 
@@ -175,7 +181,7 @@ struct LogFromNotificationIntent: AppIntent {
     var appName: String?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("解析付款通知 \(\.$title) \(\.$body)") {
+        Summary("解析付款通知 \(\.$title) \(\.$subtitle) \(\.$body)") {
             \.$appName
         }
     }
@@ -183,12 +189,18 @@ struct LogFromNotificationIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let rawTitle = title ?? ""
+        let rawSubtitle = subtitle ?? ""
         let rawBody = body ?? ""
         let rawApp = appName ?? ""
 
-        guard let parsed = NotificationParser.parse(title: rawTitle, body: rawBody, appName: rawApp) else {
+        guard let parsed = NotificationParser.parse(
+            title: rawTitle,
+            subtitle: rawSubtitle,
+            body: rawBody,
+            appName: rawApp
+        ) else {
             PersistenceController.shared.appendDebugLog(
-                "Notif ignored | title='\(rawTitle)' body='\(rawBody.replacingOccurrences(of: "\n", with: " "))'"
+                "Notif ignored | title='\(rawTitle)' sub='\(rawSubtitle)' body='\(rawBody.replacingOccurrences(of: "\n", with: " "))'"
             )
             return .result(dialog: "非消費通知，已略過。/ Non-expense notification ignored.")
         }
