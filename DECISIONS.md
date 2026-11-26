@@ -93,3 +93,15 @@ This document records key technical and product decisions made for **TapBook** a
   2. Score candidate accounts in `matchAccount` by specificity: exact name > full account name substring > bank-specific keywords > generic network fallback (only allowed on generic network buckets or accounts that already matched their bank).
   3. Prompt the user with a confirmation dialog when renaming an account that has historical records: either cascade-rename all past records or rename the account only while preserving historical record labels.
 - **Consequences**: Multiple Visa/Mastercard accounts from different banks match accurately and historical data stays safe when splitting a generic card bucket into bank-specific cards.
+
+---
+
+## ADR-010: Payment Notification Auto-Logging (`LogFromNotificationIntent`) for Octopus, PayMe & AlipayHK
+
+- **Status**: Accepted
+- **Context**: While Apple Wallet's `Transaction` trigger omits `Amount` for Hong Kong Octopus and does not fire for online Apple Pay, PayMe, or AlipayHK, newer iOS versions provide a native Shortcuts **Notification** automation trigger that passes notification `Title` and `Body` (e.g., `Octopus` / `消費：HK$8.00\n你的新餘額為 HK$95.10。`).
+- **Decision**:
+  1. Add `LogFromNotificationIntent` with `authenticationPolicy = .alwaysAllowed` (enabling lock-screen execution without Face ID).
+  2. Implement `NotificationParser` to parse Hong Kong payment notifications from Wallet/Octopus, PayMe, AlipayHK, and local banks while stripping balance/credit-limit clauses and ignoring OTPs, incoming transfers, and refunds.
+  3. Seed `PayMe` and `AlipayHK` accounts (with idempotent migration for existing installs) and add a 30-second deduplication window in `PersistenceController` in case both Transaction and Notification automations fire for the same payment.
+- **Consequences**: Exact HKD amounts for Octopus, PayMe, AlipayHK, and online/in-app card notifications are logged automatically and offline on device.

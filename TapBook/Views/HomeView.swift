@@ -12,7 +12,7 @@ enum HomeFilter: String, CaseIterable, Identifiable {
     func title(isChinese: Bool) -> String {
         switch self {
         case .all: return isChinese ? "全部" : "All"
-        case .appleWallet: return isChinese ? "Apple Wallet" : "Apple Wallet"
+        case .appleWallet: return isChinese ? "自動記帳" : "Auto"
         case .octopus: return isChinese ? "八達通" : "Octopus"
         case .manual: return isChinese ? "手動" : "Manual"
         }

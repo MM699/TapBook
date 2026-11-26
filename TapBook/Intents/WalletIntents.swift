@@ -49,6 +49,7 @@ struct LogWalletTransactionIntent: AppIntent {
         "配合 iOS「捷徑」的 Apple Wallet 交易自動化，在背景自動記帳並分類。/ Automatically log an Apple Wallet tap transaction in the background."
     )
     static var openAppWhenRun: Bool = false
+    static var authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
     @Parameter(
         title: "金額 / Amount",
@@ -145,6 +146,78 @@ struct LogWalletTransactionIntent: AppIntent {
     }
 }
 
+// MARK: - Payment Notification Auto-Log Intent (Octopus, Wallet, PayMe, AlipayHK, Banks)
+
+struct LogFromNotificationIntent: AppIntent {
+    static var title: LocalizedStringResource = "從付款通知自動記帳 / Log From Payment Notification"
+    static var description = IntentDescription(
+        "配合 iOS「捷徑」的通知自動化（錢包 / 八達通 / PayMe / AlipayHK / 銀行 App），自動解析消費金額與商戶並背景記帳。/ Parse payment notifications from Wallet, Octopus, PayMe, AlipayHK, or HK banks and log automatically."
+    )
+    static var openAppWhenRun: Bool = false
+    static var authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+
+    @Parameter(
+        title: "通知標題 / Notification Title",
+        description: "填入捷徑通知的「標題」（例如 Octopus、PayMe、AlipayHK、商戶名）"
+    )
+    var title: String?
+
+    @Parameter(
+        title: "通知內容 / Notification Body",
+        description: "填入捷徑通知的「內文」（例如：消費：HK$8.00 你的新餘額為 HK$95.10。）"
+    )
+    var body: String?
+
+    @Parameter(
+        title: "來源 App（可選）/ Source App (Optional)",
+        description: "如捷徑有提供 App 名稱可填入"
+    )
+    var appName: String?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("解析付款通知 \(\.$title) \(\.$body)") {
+            \.$appName
+        }
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let rawTitle = title ?? ""
+        let rawBody = body ?? ""
+        let rawApp = appName ?? ""
+
+        guard let parsed = NotificationParser.parse(title: rawTitle, body: rawBody, appName: rawApp) else {
+            PersistenceController.shared.appendDebugLog(
+                "Notif ignored | title='\(rawTitle)' body='\(rawBody.replacingOccurrences(of: "\n", with: " "))'"
+            )
+            return .result(dialog: "非消費通知，已略過。/ Non-expense notification ignored.")
+        }
+
+        let record = PersistenceController.shared.autoLogWalletTransaction(
+            numericAmount: parsed.amount,
+            merchant: parsed.merchant,
+            cardName: parsed.accountHint,
+            explicitCategory: parsed.categoryOverride,
+            source: .appleWallet,
+            currencyCode: parsed.currencyCode,
+            allowPendingZero: false
+        )
+
+        guard let record else {
+            return .result(dialog: "已略過重複紀錄。/ Duplicate skipped.")
+        }
+
+        PersistenceController.shared.appendDebugLog(
+            "Notif Logged \(record.currencyCode) \(String(format: "%.2f", record.amount)) | merchant='\(record.merchant)' -> \(record.accountName)"
+        )
+        let symbol = record.currencyCode == "HKD" ? "HK$" : "\(record.currencyCode) "
+        let formatted = String(format: "\(symbol)%.2f", record.amount)
+        return .result(
+            dialog: "已記帳 \(record.merchant) \(formatted)（\(record.accountName)）"
+        )
+    }
+}
+
 // MARK: - Quick Siri / Action Button Intent (Ideal for 八達通 / Cash)
 
 struct LogQuickExpenseIntent: AppIntent {
@@ -153,6 +226,7 @@ struct LogQuickExpenseIntent: AppIntent {
         "用 Siri、捷徑或 Action Button 快速記一筆八達通或現金消費。/ Quickly log an Octopus or cash expense via Siri or Action Button."
     )
     static var openAppWhenRun: Bool = false
+    static var authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
     @Parameter(title: "金額 (HK$) / Amount", requestValueDialog: "今次使咗幾多錢？ / How much did you spend?")
     var amount: Double

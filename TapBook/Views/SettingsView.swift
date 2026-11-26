@@ -31,9 +31,9 @@ struct SettingsView: View {
                                 .font(.title2)
                                 .foregroundStyle(.blue)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(lang.t("Apple Wallet 自動記帳設定", "Apple Wallet Auto-Log Setup"))
+                                Text(lang.t("自動記帳設定（推薦：通知自動化）", "Auto-Log Setup (Recommended: Notifications)"))
                                     .font(.body.weight(.semibold))
-                                Text(lang.t("3 分鐘設定捷徑自動化（Visa / Mastercard / AE / 八達通）", "3-minute Shortcuts automation guide"))
+                                Text(lang.t("支援八達通真銀碼、PayMe、AlipayHK、Visa / AE", "Octopus exact amount, PayMe, AlipayHK, Visa / AE"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -47,6 +47,15 @@ struct SettingsView: View {
                         Label(
                             lang.t("測試模擬 Apple Pay 拍卡記帳", "Simulate Apple Pay Tap"),
                             systemImage: "sparkles"
+                        )
+                    }
+
+                    Button {
+                        simulatePaymentNotification()
+                    } label: {
+                        Label(
+                            lang.t("測試模擬通知記帳（八達通 / PayMe / AlipayHK）", "Simulate Payment Notification (Octopus/PayMe/Alipay)"),
+                            systemImage: "bell.and.waves.left.and.right.fill"
                         )
                     }
 
@@ -190,6 +199,32 @@ struct SettingsView: View {
             )
         }
     }
+
+    private func simulatePaymentNotification() {
+        let samples: [(String, String, String)] = [
+            ("Octopus", "消費：HK$8.00\n你的新餘額為 HK$95.10。", "Wallet"),
+            ("PayMe", "你已支付 HK$45.00 給 7-Eleven", "PayMe"),
+            ("AlipayHK", "你已成功向 大家樂 付款 HK$62.00", "AlipayHK"),
+            ("Octopus", "消費：HK$40.00\n你的新餘額為 HK$182.10。", "Wallet"),
+            ("PayMe", "You paid HK$38.00 to Starbucks", "PayMe")
+        ]
+        let pick = samples.randomElement()!
+        if let parsed = NotificationParser.parse(title: pick.0, body: pick.1, appName: pick.2),
+           let record = PersistenceController.shared.autoLogWalletTransaction(
+            numericAmount: parsed.amount,
+            merchant: parsed.merchant,
+            cardName: parsed.accountHint,
+            explicitCategory: parsed.categoryOverride,
+            source: .appleWallet,
+            currencyCode: parsed.currencyCode,
+            allowPendingZero: false
+           ) {
+            simulatedToast = lang.t(
+                "已解析通知：\(record.merchant) \(lang.formatCurrency(record.amount)) → \(record.category.displayName(isChinese: true))（\(record.accountName)）",
+                "Parsed Notification: \(record.merchant) \(lang.formatCurrency(record.amount)) → \(record.category.displayName(isChinese: false)) (\(record.accountName))"
+            )
+        }
+    }
 }
 
 // MARK: - Apple Wallet Shortcuts Setup Guide
@@ -203,15 +238,15 @@ struct WalletSetupGuideView: View {
                 // Intro Banner
                 VStack(alignment: .leading, spacing: 8) {
                     Label(
-                        lang.t("用 iOS 捷徑實現背景自動記帳", "Background Auto-Log via iOS Shortcuts"),
-                        systemImage: "wave.3.right.circle.fill"
+                        lang.t("用「通知自動化」實現全自動記帳（推薦）", "Full Auto-Log via Notification Automation (Recommended)"),
+                        systemImage: "bell.badge.fill"
                     )
                     .font(.headline)
                     .foregroundStyle(.blue)
 
                     Text(lang.t(
-                        "只需要設定一次，之後每次用 Apple Pay（Visa / Mastercard 等）拍卡，TapBook 會喺背景自動記低金額、商戶同自動分類，完全唔使開 App。",
-                        "Set it up once — every time you tap Apple Pay (Visa / Mastercard, etc.), TapBook automatically logs the amount, merchant, and category in the background."
+                        "透過 iOS 捷徑嘅「通知」觸發器，可同時自動讀取「錢包（八達通真銀碼 + Visa / Mastercard / AE）」、「PayMe」、「AlipayHK」及銀行 App 付款通知，100% 本機離線解析，完全唔使登入銀行！",
+                        "Using iOS Shortcuts' Notification trigger, TapBook automatically parses exact amounts from Wallet (Octopus + Visa / Mastercard / AE), PayMe, AlipayHK, and HK bank alerts — 100% offline with zero bank logins."
                     ))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -223,59 +258,59 @@ struct WalletSetupGuideView: View {
                 // Steps
                 stepCard(
                     number: "1",
-                    title: lang.t("打開 iPhone「捷徑」App", "Open the Apple Shortcuts App"),
+                    title: lang.t("打開 iPhone「捷徑」App → 自動化", "Open Apple Shortcuts → Automation"),
                     detail: lang.t(
-                        "點選底部「自動化」分頁，再按右上角「＋」新增個人自動化。",
-                        "Go to the 'Automation' tab at the bottom and tap '+' to create a new personal automation."
+                        "點選底部「自動化」分頁，按右上角「＋」新增個人自動化。",
+                        "Go to the 'Automation' tab and tap '+' to create a new personal automation."
                     )
                 )
 
                 stepCard(
                     number: "2",
-                    title: lang.t("揀選「交易」(Transaction)", "Choose 'Transaction'"),
+                    title: lang.t("揀選「通知」(Notification)", "Choose 'Notification'"),
                     detail: lang.t(
-                        "搵到並點選「交易」→ 可揀 Any Card（或勾選你嘅 Visa / Mastercard / AE / 八達通）→ 開啟「Automation（立即執行）」並關閉「Notify」。",
-                        "Select 'Transaction' → choose Any Card (or check Visa / Mastercard / AE / Octopus) → turn ON Automation (Run Immediately) and turn OFF Notify."
+                        "在 App 列表勾選「錢包 (Wallet)」（包晒八達通同 Apple Pay 信用卡）、「PayMe」、「AlipayHK」，以及你有開消費通知嘅銀行 App → 開啟「立即執行」並關閉「通知我」。",
+                        "Select 'Wallet' (covers Octopus & Apple Pay cards), 'PayMe', 'AlipayHK', and any HK bank apps → turn ON Run Immediately and turn OFF Notify When Run."
                     )
                 )
 
                 stepCard(
                     number: "3",
-                    title: lang.t("加入 TapBook 動作", "Add TapBook Action"),
+                    title: lang.t("加入 TapBook「從付款通知自動記帳」", "Add TapBook 'Log From Payment Notification'"),
                     detail: lang.t(
-                        "搜尋「TapBook」→ 揀選「記錄 Apple Wallet 交易」，展開選項並關閉「Show When Run」（執行時顯示）。",
-                        "Search 'TapBook' → choose 'Log Apple Wallet Transaction', expand options, and turn OFF 'Show When Run'."
+                        "搜尋「TapBook」→ 揀選「從付款通知自動記帳」，展開選項並關閉「Show When Run」（執行時顯示）。",
+                        "Search 'TapBook' → choose 'Log From Payment Notification', expand options, and turn OFF 'Show When Run'."
                     )
                 )
 
                 stepCard(
                     number: "4",
-                    title: lang.t("填入 3 個交易變數", "Map the 3 Transaction Variables"),
+                    title: lang.t("填入通知嘅「標題」同「內文」", "Map Notification Title & Body"),
                     detail: lang.t(
-                        "• 商戶 → 揀觸發器嘅「Merchant」\n• 金額 → 揀觸發器嘅「Amount」\n• 卡片或帳戶 → 揀觸發器嘅「Card or Pass」\n完成後返回即自動儲存生效！",
-                        "• Merchant → Transaction (Merchant)\n• Amount → Transaction (Amount)\n• Card or Account → Transaction (Card or Pass)\nGo back to save and activate!"
+                        "• 通知標題 → 揀通知觸發器嘅「Title / 標題」\n• 通知內容 → 揀通知觸發器嘅「Body / 內文」\n完成後返回儲存即刻生效！如果之前整過舊嘅「交易」自動化可以關閉，免得重覆。",
+                        "• Notification Title → Notification (Title)\n• Notification Body → Notification (Body)\nGo back to save! You can turn off the older Transaction automation to keep things clean."
                     )
                 )
 
-                // Octopus note
+                // Octopus & E-Wallet note
                 VStack(alignment: .leading, spacing: 8) {
                     Label(
-                        lang.t("關於香港八達通 (Octopus)", "About Hong Kong Octopus"),
-                        systemImage: "info.circle.fill"
+                        lang.t("自動過濾餘額、驗證碼同收款", "Smart Filtering Built-In"),
+                        systemImage: "checkmark.shield.fill"
                     )
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.green)
 
                     Text(lang.t(
-                        "八達通係離線晶片扣數，iOS 觸發捷徑時唔會回傳金額。開啟「記錄 $0 / 待補金額拍卡」後，每次嘟八達通會自動記低一筆「八達通消費（待補金額）」並彈通知提醒，點一下即可直接打銀碼；亦可用首頁「一鍵快記」一秒入數。",
-                        "Octopus deducts offline in the Secure Element, so iOS omits Amount in Shortcuts. With 'Log $0 / Pending Amount Taps' enabled, TapBook logs an 'Octopus (Needs Amount)' entry so you can fill in the amount with 1 tap, or use Home's Quick Tap buttons."
+                        "• 八達通通知「消費：HK$8.00 / 新餘額 HK$95.10」只會抽消費額 $8.00，唔會誤讀餘額。\n• PayMe / AlipayHK 收到錢、銀行 OTP 驗證碼、退款都會自動略過，只記真正消費。",
+                        "• Octopus alerts ('Spent HK$8.00 / New balance HK$95.10') extract $8.00 only and ignore balance.\n• Incoming PayMe/Alipay transfers, refunds, and OTP verification codes are automatically ignored."
                     ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .padding()
         }

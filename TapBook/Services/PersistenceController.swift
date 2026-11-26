@@ -27,6 +27,56 @@ final class PersistenceController {
         migrateAppleStoreRuleIfNeeded()
         migrateOctopusApplePayTitlesIfNeeded()
         migrateGenericCardKeywordsIfNeeded()
+        migrateDefaultPayMeAlipayAccountsIfNeeded()
+    }
+
+    private func migrateDefaultPayMeAlipayAccountsIfNeeded() {
+        let migrationKey = "tapbook_migrated_payme_alipay_v1"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+
+        let context = container.mainContext
+        let descriptor = FetchDescriptor<PaymentAccount>()
+        if let accounts = try? context.fetch(descriptor) {
+            var nextOrder = (accounts.map(\.sortOrder).max() ?? 4) + 1
+            var didModify = false
+
+            let hasPayMe = accounts.contains {
+                ($0.name + " " + $0.walletMatchKeywords).lowercased().contains("payme")
+            }
+            if !hasPayMe {
+                context.insert(PaymentAccount(
+                    name: "PayMe",
+                    walletMatchKeywords: "payme",
+                    type: .fps,
+                    colorHex: "#DC2626",
+                    iconName: "qrcode",
+                    sortOrder: nextOrder
+                ))
+                nextOrder += 1
+                didModify = true
+            }
+
+            let hasAlipay = accounts.contains {
+                let lower = ($0.name + " " + $0.walletMatchKeywords).lowercased()
+                return lower.contains("alipay") || lower.contains("支付寶")
+            }
+            if !hasAlipay {
+                context.insert(PaymentAccount(
+                    name: "AlipayHK",
+                    walletMatchKeywords: "alipay,alipayhk,支付寶",
+                    type: .fps,
+                    colorHex: "#0284C7",
+                    iconName: "qrcode",
+                    sortOrder: nextOrder
+                ))
+                didModify = true
+            }
+
+            if didModify {
+                try? context.save()
+            }
+        }
+        UserDefaults.standard.set(true, forKey: migrationKey)
     }
 
     private func migrateGenericCardKeywordsIfNeeded() {
@@ -222,12 +272,28 @@ final class PersistenceController {
                     sortOrder: 3
                 ),
                 PaymentAccount(
+                    name: "PayMe",
+                    walletMatchKeywords: "payme",
+                    type: .fps,
+                    colorHex: "#DC2626",
+                    iconName: "qrcode",
+                    sortOrder: 4
+                ),
+                PaymentAccount(
+                    name: "AlipayHK",
+                    walletMatchKeywords: "alipay,alipayhk,支付寶",
+                    type: .fps,
+                    colorHex: "#0284C7",
+                    iconName: "qrcode",
+                    sortOrder: 5
+                ),
+                PaymentAccount(
                     name: "現金",
                     walletMatchKeywords: "cash,現金",
                     type: .cash,
                     colorHex: "#15803D",
                     iconName: "banknote.fill",
-                    sortOrder: 4
+                    sortOrder: 6
                 )
             ]
             defaults.forEach { context.insert($0) }
@@ -458,6 +524,25 @@ final class PersistenceController {
 
         let matchedCategory = explicitCategory ?? categorize(merchant: finalMerchant, in: context)
         let finalCurrency = currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "HKD" : currencyCode.uppercased()
+
+        // Deduplicate if both Transaction & Notification automations fire for the same payment within 30s
+        if !isPendingAmount && source == .appleWallet {
+            let cutoff = Date.now.addingTimeInterval(-30)
+            var recentDescriptor = FetchDescriptor<TransactionRecord>(
+                sortBy: [SortDescriptor(\.date, order: .reverse)]
+            )
+            recentDescriptor.fetchLimit = 5
+            if let recent = try? context.fetch(recentDescriptor),
+               recent.contains(where: {
+                   $0.date >= cutoff &&
+                   abs($0.amount - finalAmount) < 0.001 &&
+                   $0.accountName == matchedAccount &&
+                   $0.source == .appleWallet
+               }) {
+                appendDebugLog("Duplicate skipped (<30s) | \(finalCurrency) \(String(format: "%.2f", finalAmount)) \(matchedAccount)")
+                return nil
+            }
+        }
 
         var noteParts: [String] = []
         if let cardName, !cardName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
